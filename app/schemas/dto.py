@@ -186,6 +186,49 @@ class UserCreate(BaseModel):
     team_id: int | None = None
 
 
+class EmailSend(BaseModel):
+    contact_id: int
+    to: str | None = None
+    subject: str
+    body: str
+
+
+class CampaignSend(BaseModel):
+    subject: str
+    body: str
+
+
+class ProductCreate(BaseModel):
+    name: str
+    sku: str | None = None
+    unit_price: float = 0
+    tax_rate: float = 0
+    is_active: int = 1
+
+
+class ProductOut(ProductCreate):
+    id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class QuoteLineIn(BaseModel):
+    product_id: int | None = None
+    description: str | None = None
+    quantity: float = 1
+    unit_price: float = 0
+    tax_rate: float = 0
+
+
+class QuoteCreate(BaseModel):
+    account_id: int | None = None
+    contact_id: int | None = None
+    quote_number: str | None = None
+    lines: list[QuoteLineIn] = Field(default_factory=list)
+
+
 class LoginRequest(BaseModel):
     email: str
     password: str

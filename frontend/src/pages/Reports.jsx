@@ -54,6 +54,21 @@ export default function Reports() {
     value: item.outbound_count + item.inbound_count,
   }));
 
+  const exportCsv = () => {
+    const rows = [['section', 'key', 'value']];
+    Object.entries(data?.overview?.core_totals || {}).forEach(([k, v]) => rows.push(['core_total', k, v]));
+    (data?.funnel || []).forEach(s => rows.push(['funnel_stage', `stage_${s.stage_id}`, s.count]));
+    (data?.activities || []).forEach(a => rows.push(['activity_type', a.type, a.count]));
+    (data?.channels || []).forEach(c => rows.push(['channel', c.channel, c.outbound_count + c.inbound_count]));
+    const csv = rows.map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `apex-report-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -63,9 +78,9 @@ export default function Reports() {
             <Filter className="h-4 w-4 mr-2" />
             Filter
           </button>
-          <button className="flex items-center px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700">
+          <button onClick={exportCsv} className="flex items-center px-4 py-2 bg-primary-600 text-white rounded-md text-sm font-medium hover:bg-primary-700">
             <Download className="h-4 w-4 mr-2" />
-            Export PDF
+            Export CSV
           </button>
         </div>
       </div>

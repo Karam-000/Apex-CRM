@@ -7,6 +7,8 @@ import Contacts from './pages/Contacts';
 import Pipeline from './pages/Pipeline';
 import Campaigns from './pages/Campaigns';
 import Deals from './pages/Deals';
+import Quotes from './pages/Quotes';
+import Products from './pages/Products';
 import Tickets from './pages/Tickets';
 import Invoices from './pages/Invoices';
 import Activities from './pages/Activities';
@@ -73,6 +75,8 @@ function App() {
           <Route path="/pipeline" element={<Pipeline user={user} />} />
           <Route path="/campaigns" element={<Campaigns user={user} />} />
           <Route path="/deals" element={<Deals user={user} />} />
+          <Route path="/quotes" element={<Quotes user={user} />} />
+          <Route path="/products" element={<Products user={user} />} />
           <Route path="/activities" element={<Activities user={user} />} />
           <Route path="/tickets" element={<Tickets user={user} />} />
           <Route path="/invoices" element={<Invoices user={user} />} />

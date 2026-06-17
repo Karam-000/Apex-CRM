@@ -2,17 +2,19 @@ import csv
 import io
 import secrets
 import shutil
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import case, func
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.db import engine, get_db
 from app.core.security import (
     AuthContext,
+    create_access_token,
     ensure_roles,
     hash_password,
     hash_token,
@@ -41,7 +43,11 @@ from app.models.entities import (
     LeadScore,
     LeadAttribution,
     Message,
+    Order,
     Payment,
+    Product,
+    Quote,
+    QuoteLine,
     ChurnRiskScore,
     QuotaTarget,
     Role,
@@ -62,6 +68,7 @@ from app.schemas.dto import (
     ContactOut,
     CampaignCreate,
     CampaignOut,
+    CampaignSend,
     CampaignUpdate,
     ConnectorCreate,
     ConnectorOut,
@@ -73,6 +80,10 @@ from app.schemas.dto import (
     InvoiceUpdate,
     TicketUpdate,
     UserCreate,
+    EmailSend,
+    ProductCreate,
+    ProductOut,
+    QuoteCreate,
     LoginRequest,
     LoginResponse,
     QuotaCreate,
@@ -84,6 +95,8 @@ from app.schemas.dto import (
     WorkflowRuleCreate,
 )
 from app.services.connectors import build_signature, send_json
+from app.services.email import send_email
+from app.services.pdf import build_invoice_pdf, build_quote_pdf
 from app.services.scoring import (
     churn_risk_from_thresholds,
     commission_and_attainment,
@@ -206,12 +219,24 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         db.add(cred)
         db.commit()
     
+    # Issue a signed, expiring JWT access token.
+    token = create_access_token(user.id, role_name, user.team_id)
     return {
         "user_id": user.id,
         "name": user.name,
         "role": role_name,
-        "token": token_plain
+        "token": token,
     }
+
+
+@router.post("/auth/refresh", response_model=LoginResponse)
+def refresh_token(auth: AuthContext = Depends(require_auth), db: Session = Depends(get_db)):
+    """Exchange a still-valid token for a fresh JWT (sliding session)."""
+    user = db.query(User).filter(User.id == auth.user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User no longer exists.")
+    token = create_access_token(user.id, auth.role, auth.team_id)
+    return {"user_id": user.id, "name": user.name, "role": auth.role, "token": token}
 
 
 @router.post("/contacts", response_model=ContactOut)
@@ -280,10 +305,119 @@ def create_campaign(payload: CampaignCreate, db: Session = Depends(get_db), auth
     ensure_roles(auth, {"admin", "supervisor"})
     row = Campaign(**payload.model_dump(), created_by=auth.user_id)
     db.add(row)
-    log_audit(db, "campaign", 0, "create", payload.model_dump(mode="json"))
+    db.flush()
+    log_audit(db, "campaign", row.id, "create", payload.model_dump(mode="json"))
     db.commit()
     db.refresh(row)
     return row
+
+
+@router.post("/campaigns/{campaign_id}/send")
+def send_campaign(campaign_id: int, payload: CampaignSend, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    """Email a campaign's audience over SMTP and log each send on the contact timeline."""
+    ensure_roles(auth, {"admin", "supervisor"})
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="campaign not found")
+
+    # Audience: contacts attributed to this campaign's source, else all contacts.
+    # Supervisors are scoped to their team (consistent with the rest of the app); admins see all.
+    base = db.query(Contact)
+    if auth.role == "supervisor":
+        team_ids = team_user_ids(db, auth.team_id) or [auth.user_id]
+        base = base.filter(Contact.owner_user_id.in_(team_ids))
+    if campaign.source:
+        contact_ids = [r.contact_id for r in db.query(LeadAttribution).filter(LeadAttribution.source == campaign.source).all()]
+        audience = base.filter(Contact.id.in_(contact_ids)).all() if contact_ids else []
+    else:
+        audience = base.all()
+
+    counts = {"sent": 0, "failed": 0, "dry_run": 0, "skipped": 0, "total": len(audience)}
+    for contact in audience:
+        if not contact.email:
+            counts["skipped"] += 1
+            continue
+        result = send_email(contact.email, payload.subject, payload.body)
+        status = "sent" if result.get("ok") else ("dry_run" if result.get("dry_run") else "failed")
+        counts[status] = counts.get(status, 0) + 1
+        row = Message(
+            contact_id=contact.id,
+            account_id=contact.account_id,
+            channel="email",
+            direction="outbound",
+            provider_message_id=f"camp{campaign_id}-{uuid.uuid4().hex}",
+            content_text=payload.body,
+            status=status,
+            sent_at=datetime.utcnow() if result.get("ok") else None,
+        )
+        db.add(row)
+        db.flush()
+        log_event(
+            db,
+            contact_id=contact.id,
+            account_id=contact.account_id,
+            event_type="campaign_email",
+            source_module="campaign",
+            source_id=campaign_id,
+            payload={"campaign": campaign.name, "status": status},
+            channel="email",
+        )
+    if campaign.status == "draft":
+        campaign.status = "active"
+    log_audit(db, "campaign", campaign_id, "send", {"subject": payload.subject, **counts})
+    db.commit()
+    return {"campaign_id": campaign_id, **counts}
+
+
+@router.get("/campaigns/sample-csv")
+def campaign_sample_csv(auth: AuthContext = Depends(require_auth)):
+    """Download a sample recipients CSV for the bulk broadcast feature."""
+    ensure_roles(auth, {"admin", "supervisor"})
+    content = "email,name\njane@example.com,Jane Doe\njohn@example.com,John Smith\n"
+    return PlainTextResponse(
+        content,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="campaign_recipients_sample.csv"'},
+    )
+
+
+@router.post("/campaigns/broadcast")
+def broadcast_csv(
+    subject: str = Form(...),
+    body: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    auth: AuthContext = Depends(require_auth),
+):
+    """Bulk-email recipients from an uploaded CSV (columns: email, name).
+
+    Use {{name}} in the body to personalize per recipient.
+    """
+    ensure_roles(auth, {"admin", "supervisor"})
+    try:
+        content = file.file.read().decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded CSV.")
+    reader = csv.DictReader(io.StringIO(content))
+    counts = {"sent": 0, "failed": 0, "dry_run": 0, "skipped": 0, "total": 0}
+    errors: list[dict] = []
+    for line_no, row in enumerate(reader, start=2):
+        counts["total"] += 1
+        email = (row.get("email") or "").strip()
+        name = (row.get("name") or "").strip()
+        if not email:
+            counts["skipped"] += 1
+            errors.append({"line": line_no, "error": "missing email"})
+            continue
+        personalized = body.replace("{{name}}", name) if name else body
+        result = send_email(email, subject, personalized)
+        status = "sent" if result.get("ok") else ("dry_run" if result.get("dry_run") else "failed")
+        counts[status] += 1
+        if status == "failed":
+            errors.append({"line": line_no, "error": result.get("error", "send failed")})
+    log_audit(db, "campaign", 0, "broadcast_csv", {"subject": subject, **counts})
+    db.commit()
+    return {**counts, "errors": errors[:50]}
 
 
 @router.put("/campaigns/{campaign_id}", response_model=CampaignOut)
@@ -315,7 +449,10 @@ def delete_campaign(campaign_id: int, db: Session = Depends(get_db), auth: AuthC
 def create_account(payload: AccountCreate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
     if auth.role == "agent":
         raise HTTPException(status_code=403, detail="Agents cannot create accounts directly.")
-    account = Account(**payload.model_dump())
+    body = payload.model_dump()
+    if body.get("owner_user_id") is None:
+        body["owner_user_id"] = auth.user_id
+    account = Account(**body)
     db.add(account)
     db.flush()
     log_audit(db, "account", account.id, "create", payload.model_dump())
@@ -555,6 +692,48 @@ def list_messages(db: Session = Depends(get_db), auth: AuthContext = Depends(req
         ids = team_user_ids(db, auth.team_id)
         query = query.join(Contact, Contact.id == Message.contact_id).filter(Contact.owner_user_id.in_(ids))
     return query.order_by(Message.id.desc()).all()
+
+
+@router.post("/email/send")
+def send_contact_email(payload: EmailSend, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    """Send an email to a contact over SMTP and log it on the contact timeline."""
+    contact = db.query(Contact).filter(Contact.id == payload.contact_id).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="contact not found")
+    if not can_view_user_scope(contact.owner_user_id, auth, db):
+        raise HTTPException(status_code=403, detail="Not allowed to email this contact.")
+    recipient = (payload.to or contact.email or "").strip()
+    if not recipient:
+        raise HTTPException(status_code=400, detail="No recipient email address available.")
+
+    result = send_email(recipient, payload.subject, payload.body)
+    status = "sent" if result.get("ok") else ("dry_run" if result.get("dry_run") else "failed")
+
+    row = Message(
+        contact_id=contact.id,
+        account_id=contact.account_id,
+        channel="email",
+        direction="outbound",
+        provider_message_id=f"smtp-{uuid.uuid4().hex}",
+        content_text=payload.body,
+        status=status,
+        sent_at=datetime.utcnow() if result.get("ok") else None,
+    )
+    db.add(row)
+    db.flush()
+    log_event(
+        db,
+        contact_id=contact.id,
+        account_id=contact.account_id,
+        event_type="message_outbound",
+        source_module="email",
+        source_id=row.id,
+        payload={"subject": payload.subject, "status": status},
+        channel="email",
+    )
+    log_audit(db, "email", row.id, "send", {"to": recipient, "subject": payload.subject, "status": status})
+    db.commit()
+    return {"message_id": row.id, "to": recipient, "status": status, **result}
 
 
 @router.post("/consents")
@@ -1045,6 +1224,203 @@ def analytics_overview(db: Session = Depends(get_db), auth: AuthContext = Depend
     }
 
 
+# --- Products ----------------------------------------------------------------
+@router.get("/products", response_model=list[ProductOut])
+def list_products(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    return db.query(Product).order_by(Product.id.desc()).all()
+
+
+@router.post("/products", response_model=ProductOut)
+def create_product(payload: ProductCreate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin", "supervisor"})
+    row = Product(**payload.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.put("/products/{product_id}", response_model=ProductOut)
+def update_product(product_id: int, payload: ProductCreate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin", "supervisor"})
+    row = db.query(Product).filter(Product.id == product_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="product not found")
+    for field, value in payload.model_dump().items():
+        setattr(row, field, value)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.delete("/products/{product_id}")
+def delete_product(product_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin", "supervisor"})
+    row = db.query(Product).filter(Product.id == product_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="product not found")
+    db.delete(row)
+    db.commit()
+    return {"status": "deleted", "id": product_id}
+
+
+# --- Quotes ------------------------------------------------------------------
+def _quote_summary(q: Quote) -> dict:
+    return {
+        "id": q.id, "quote_number": q.quote_number, "account_id": q.account_id,
+        "contact_id": q.contact_id, "status": q.status,
+        "subtotal": q.subtotal, "tax": q.tax, "total": q.total, "created_at": q.created_at,
+    }
+
+
+def _quote_detail(q: Quote, lines: list[QuoteLine]) -> dict:
+    return {
+        **_quote_summary(q),
+        "lines": [
+            {
+                "id": ln.id, "product_id": ln.product_id, "description": ln.description,
+                "quantity": ln.quantity, "unit_price": ln.unit_price,
+                "tax_rate": ln.tax_rate, "line_total": ln.line_total,
+            }
+            for ln in lines
+        ],
+    }
+
+
+@router.get("/quotes")
+def list_quotes(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    return [_quote_summary(q) for q in db.query(Quote).order_by(Quote.id.desc()).all()]
+
+
+@router.get("/quotes/{quote_id}")
+def get_quote(quote_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    quote = db.query(Quote).filter(Quote.id == quote_id).first()
+    if not quote:
+        raise HTTPException(status_code=404, detail="quote not found")
+    lines = db.query(QuoteLine).filter(QuoteLine.quote_id == quote_id).all()
+    return _quote_detail(quote, lines)
+
+
+@router.post("/quotes")
+def create_quote(payload: QuoteCreate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin", "supervisor"})
+    number = payload.quote_number or f"Q-{datetime.utcnow():%Y%m%d}-{uuid.uuid4().hex[:6].upper()}"
+    quote = Quote(
+        quote_number=number, account_id=payload.account_id, contact_id=payload.contact_id,
+        owner_user_id=auth.user_id, status="draft",
+    )
+    db.add(quote)
+    db.flush()
+    subtotal = 0.0
+    tax = 0.0
+    for line in payload.lines:
+        unit, rate, desc = line.unit_price, line.tax_rate, line.description
+        if line.product_id:
+            product = db.get(Product, line.product_id)
+            if product:
+                if not unit:
+                    unit = product.unit_price
+                if not rate:
+                    rate = product.tax_rate
+                if not desc:
+                    desc = product.name
+        line_sub = unit * line.quantity
+        line_tax = line_sub * (rate / 100.0)
+        db.add(QuoteLine(
+            quote_id=quote.id, product_id=line.product_id, description=desc or "",
+            quantity=line.quantity, unit_price=unit, tax_rate=rate, line_total=round(line_sub + line_tax, 2),
+        ))
+        subtotal += line_sub
+        tax += line_tax
+    quote.subtotal = round(subtotal, 2)
+    quote.tax = round(tax, 2)
+    quote.total = round(subtotal + tax, 2)
+    log_audit(db, "quote", quote.id, "create", {"quote_number": number, "total": quote.total})
+    db.commit()
+    db.refresh(quote)
+    lines = db.query(QuoteLine).filter(QuoteLine.quote_id == quote.id).all()
+    return _quote_detail(quote, lines)
+
+
+@router.post("/quotes/{quote_id}/status")
+def set_quote_status(quote_id: int, status: str = Query(...), db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin", "supervisor"})
+    if status not in {"draft", "sent", "accepted", "rejected"}:
+        raise HTTPException(status_code=400, detail="invalid status")
+    quote = db.query(Quote).filter(Quote.id == quote_id).first()
+    if not quote:
+        raise HTTPException(status_code=404, detail="quote not found")
+    quote.status = status
+    db.commit()
+    return {"id": quote.id, "status": quote.status}
+
+
+@router.delete("/quotes/{quote_id}")
+def delete_quote(quote_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin", "supervisor"})
+    quote = db.query(Quote).filter(Quote.id == quote_id).first()
+    if not quote:
+        raise HTTPException(status_code=404, detail="quote not found")
+    db.query(QuoteLine).filter(QuoteLine.quote_id == quote_id).delete()
+    db.delete(quote)
+    log_audit(db, "quote", quote_id, "delete", {})
+    db.commit()
+    return {"status": "deleted", "id": quote_id}
+
+
+@router.post("/quotes/{quote_id}/convert")
+def convert_quote(quote_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    """Quote -> Order -> Invoice."""
+    ensure_roles(auth, {"admin", "supervisor"})
+    quote = db.query(Quote).filter(Quote.id == quote_id).first()
+    if not quote:
+        raise HTTPException(status_code=404, detail="quote not found")
+    if quote.status == "converted":
+        raise HTTPException(status_code=400, detail="quote already converted")
+    ts = int(datetime.utcnow().timestamp())
+    order = Order(
+        order_number=f"SO-{quote.id}-{ts}", quote_id=quote.id, account_id=quote.account_id,
+        status="open", total=quote.total,
+    )
+    db.add(order)
+    db.flush()
+    invoice = Invoice(
+        account_id=quote.account_id, invoice_number=f"INV-Q{quote.id}-{ts}",
+        due_date=datetime.utcnow() + timedelta(days=30),
+        subtotal=quote.subtotal, tax=quote.tax, total=quote.total, status="issued",
+    )
+    db.add(invoice)
+    db.flush()
+    order.invoice_id = invoice.id
+    order.status = "invoiced"
+    quote.status = "converted"
+    log_audit(db, "quote", quote.id, "convert", {"order_id": order.id, "invoice_id": invoice.id})
+    db.commit()
+    return {"quote_id": quote.id, "order_id": order.id, "order_number": order.order_number,
+            "invoice_id": invoice.id, "invoice_number": invoice.invoice_number}
+
+
+@router.get("/quotes/{quote_id}/pdf")
+def quote_pdf(quote_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    quote = db.query(Quote).filter(Quote.id == quote_id).first()
+    if not quote:
+        raise HTTPException(status_code=404, detail="quote not found")
+    lines = db.query(QuoteLine).filter(QuoteLine.quote_id == quote_id).all()
+    pdf = build_quote_pdf(quote, lines)
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{quote.quote_number}.pdf"'})
+
+
+@router.get("/invoices/{invoice_id}/pdf")
+def invoice_pdf(invoice_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="invoice not found")
+    pdf = build_invoice_pdf(invoice)
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{invoice.invoice_number}.pdf"'})
+
+
 @router.post("/connectors", response_model=ConnectorOut)
 def create_connector(payload: ConnectorCreate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
     ensure_roles(auth, {"admin"})
@@ -1347,13 +1723,30 @@ def create_payment(invoice_id: int, amount: float, method: str = "bank_transfer"
 def list_invoices(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
     query = db.query(Invoice)
     if auth.role != "admin":
-        # Non-admins only see invoices tied to deals they (or their team) own.
+        # Non-admins see invoices tied to deals OR accounts they (or their team) own.
+        # Quote-converted invoices have no deal_id, so account ownership must be checked too.
         if auth.role == "supervisor":
             owner_ids = team_user_ids(db, auth.team_id) or [auth.user_id]
         else:
             owner_ids = [auth.user_id]
         deal_ids = [d.id for d in db.query(Deal.id).filter(Deal.owner_user_id.in_(owner_ids)).all()]
-        query = query.filter(Invoice.deal_id.in_(deal_ids)) if deal_ids else query.filter(Invoice.id == -1)
+        account_ids = [a.id for a in db.query(Account.id).filter(Account.owner_user_id.in_(owner_ids)).all()]
+        # Invoices created by converting a quote the user owns (via the Order link).
+        converted_invoice_ids = [
+            o.invoice_id
+            for o in db.query(Order.invoice_id)
+            .join(Quote, Order.quote_id == Quote.id)
+            .filter(Quote.owner_user_id.in_(owner_ids), Order.invoice_id.isnot(None))
+            .all()
+        ]
+        conditions = []
+        if deal_ids:
+            conditions.append(Invoice.deal_id.in_(deal_ids))
+        if account_ids:
+            conditions.append(Invoice.account_id.in_(account_ids))
+        if converted_invoice_ids:
+            conditions.append(Invoice.id.in_(converted_invoice_ids))
+        query = query.filter(or_(*conditions)) if conditions else query.filter(Invoice.id == -1)
     rows = query.order_by(Invoice.id.desc()).all()
     return [
         {

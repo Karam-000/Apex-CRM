@@ -414,6 +414,59 @@ class LeadAttribution(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class Product(Base):
+    __tablename__ = "products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    sku: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    unit_price: Mapped[float] = mapped_column(Float, default=0)
+    tax_rate: Mapped[float] = mapped_column(Float, default=0)  # percent, e.g. 15 = 15%
+    is_active: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Quote(Base):
+    __tablename__ = "quotes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    quote_number: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)
+    contact_id: Mapped[int | None] = mapped_column(ForeignKey("contacts.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="draft")  # draft/sent/accepted/rejected/converted
+    subtotal: Mapped[float] = mapped_column(Float, default=0)
+    tax: Mapped[float] = mapped_column(Float, default=0)
+    total: Mapped[float] = mapped_column(Float, default=0)
+    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class QuoteLine(Base):
+    __tablename__ = "quote_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    quote_id: Mapped[int] = mapped_column(ForeignKey("quotes.id"), nullable=False)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
+    description: Mapped[str] = mapped_column(String(255), default="")
+    quantity: Mapped[float] = mapped_column(Float, default=1)
+    unit_price: Mapped[float] = mapped_column(Float, default=0)
+    tax_rate: Mapped[float] = mapped_column(Float, default=0)
+    line_total: Mapped[float] = mapped_column(Float, default=0)
+
+
+class Order(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    order_number: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    quote_id: Mapped[int | None] = mapped_column(ForeignKey("quotes.id"), nullable=True)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)
+    invoice_id: Mapped[int | None] = mapped_column(ForeignKey("invoices.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="open")  # open/invoiced
+    total: Mapped[float] = mapped_column(Float, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Campaign(Base):
     __tablename__ = "campaigns"
 

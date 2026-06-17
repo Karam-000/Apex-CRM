@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, Briefcase, Calendar,
   Ticket, FileText, Settings, Shield,
   Network, Zap, UserCog, CheckCircle, BarChart3,
-  UserPlus, GitBranch, Megaphone
+  UserPlus, GitBranch, Megaphone, FileText as FileQuote, Package
 } from 'lucide-react';
 
 const SidebarLink = ({ to, icon: Icon, label, active }) => (
@@ -29,6 +29,8 @@ export default function Sidebar({ user, isOpen }) {
     { to: '/contacts', icon: Users, label: 'Contacts', roles: ['admin', 'supervisor', 'agent'] },
     { to: '/pipeline', icon: GitBranch, label: 'Pipeline', roles: ['admin', 'supervisor', 'agent'] },
     { to: '/deals', icon: Briefcase, label: 'Deals', roles: ['admin', 'supervisor', 'agent'] },
+    { to: '/quotes', icon: FileQuote, label: 'Quotes', roles: ['admin', 'supervisor'] },
+    { to: '/products', icon: Package, label: 'Products', roles: ['admin', 'supervisor'] },
     { to: '/campaigns', icon: Megaphone, label: 'Campaigns', roles: ['admin', 'supervisor'] },
     { to: '/activities', icon: Calendar, label: 'Activities', roles: ['admin', 'supervisor', 'agent'] },
     { to: '/tickets', icon: Ticket, label: 'Tickets', roles: ['admin', 'supervisor', 'agent'] },

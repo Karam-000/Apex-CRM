@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import DataTable from '../components/DataTable';
-import { contactService } from '../services/api';
-import { X } from 'lucide-react';
+import { contactService, emailService } from '../services/api';
+import { X, Mail, Send } from 'lucide-react';
 
 const STAGE_STYLES = {
   customer: 'bg-green-100 text-green-800',
@@ -18,6 +18,9 @@ export default function Contacts({ user }) {
   const fileInput = useRef(null);
   const emptyForm = { first_name: '', last_name: '', email: '', phone: '', job_title: '', lifecycle_stage: 'lead' };
   const [formData, setFormData] = useState(emptyForm);
+  const [showEmail, setShowEmail] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [emailForm, setEmailForm] = useState({ contact_id: '', subject: '', body: '' });
 
   useEffect(() => { fetchContacts(); }, []);
 
@@ -67,6 +70,32 @@ export default function Contacts({ user }) {
     }
   };
 
+  const openEmail = () => {
+    setEmailForm({ contact_id: contacts[0]?.id || '', subject: '', body: '' });
+    setShowEmail(true);
+  };
+
+  const handleSendEmail = async (e) => {
+    e.preventDefault();
+    setSending(true);
+    try {
+      const res = await emailService.send({
+        contact_id: parseInt(emailForm.contact_id),
+        subject: emailForm.subject,
+        body: emailForm.body,
+      });
+      const s = res.data.status;
+      alert(s === 'sent' ? `Email sent to ${res.data.to}.`
+        : s === 'dry_run' ? `SMTP not configured — email logged as a draft (not sent). Configure SMTP in .env to send for real.`
+        : `Email failed: ${res.data.error || 'unknown error'}`);
+      setShowEmail(false);
+    } catch (error) {
+      alert('Failed to send: ' + (error.response?.data?.detail || 'Unknown error'));
+    } finally {
+      setSending(false);
+    }
+  };
+
   const handleImport = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -109,6 +138,13 @@ export default function Contacts({ user }) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-on-surface">Contacts</h1>
+        <button
+          onClick={openEmail}
+          disabled={contacts.length === 0}
+          className="flex items-center gap-2 px-4 py-2 border border-outline-variant rounded-md text-sm font-medium text-on-surface bg-surface-container-lowest hover:bg-surface-container-high transition-colors disabled:opacity-50"
+        >
+          <Mail className="h-4 w-4" /> Compose Email
+        </button>
       </div>
       <input ref={fileInput} type="file" accept=".csv" className="hidden" onChange={handleImport} />
       <DataTable
@@ -168,6 +204,44 @@ export default function Contacts({ user }) {
               </div>
               <button type="submit" className="w-full bg-primary-600 text-white py-2 rounded-md hover:bg-primary-700">
                 {editingId ? 'Save Changes' : 'Create Contact'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showEmail && (
+        <div className="fixed inset-0 bg-on-background/40 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-surface-container-lowest rounded-xl border border-outline-variant shadow-xl w-full max-w-md">
+            <div className="flex justify-between items-center px-6 py-4 border-b border-outline-variant">
+              <h2 className="text-lg font-bold text-on-surface flex items-center gap-2"><Mail className="h-5 w-5" /> Compose Email</h2>
+              <button onClick={() => setShowEmail(false)} className="text-outline hover:text-on-surface"><X className="h-5 w-5" /></button>
+            </div>
+            <form onSubmit={handleSendEmail} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-on-surface-variant mb-1">Recipient</label>
+                <select required className="block w-full border border-outline-variant rounded-md p-2 bg-surface text-sm"
+                  value={emailForm.contact_id} onChange={e => setEmailForm({ ...emailForm, contact_id: e.target.value })}>
+                  {contacts.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {`${c.first_name} ${c.last_name}`.trim()} {c.email ? `<${c.email}>` : '(no email)'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-on-surface-variant mb-1">Subject</label>
+                <input type="text" required className="block w-full border border-outline-variant rounded-md p-2 bg-surface text-sm"
+                  value={emailForm.subject} onChange={e => setEmailForm({ ...emailForm, subject: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-on-surface-variant mb-1">Message</label>
+                <textarea required rows={5} className="block w-full border border-outline-variant rounded-md p-2 bg-surface text-sm"
+                  value={emailForm.body} onChange={e => setEmailForm({ ...emailForm, body: e.target.value })} />
+              </div>
+              <button type="submit" disabled={sending}
+                className="w-full flex items-center justify-center gap-2 bg-primary-600 text-white py-2 rounded-md hover:bg-primary-700 disabled:opacity-50">
+                <Send className="h-4 w-4" /> {sending ? 'Sending...' : 'Send Email'}
               </button>
             </form>
           </div>

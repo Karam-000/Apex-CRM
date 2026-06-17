@@ -57,6 +57,15 @@
 - [Feature Guide](docs/FEATURES.md) — Bulk upload, backups, reports.
 - [Connectors Guide](docs/CONNECTORS.md) — External integrations and API keys.
 - [System Specs & Limits](docs/SPECIFICATIONS.md) — Requirements and boundaries.
+- [Changelog & Roadmap](docs/CHANGELOG.md) — What shipped in v2/v3 and what's planned for v4.
+
+## ✉️ Email (SMTP)
+
+Outbound email uses simple SMTP. Copy `.env.example` to `.env`, set `SMTP_HOST`,
+`SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and `SMTP_USE_TLS`, then use
+**Compose Email** on the Contacts page. Without SMTP configured, sends are logged as
+drafts (`dry_run`) so the app still runs locally. See the
+[Changelog](docs/CHANGELOG.md#email-smtp--how-to-use) for details.
 
 ---
 

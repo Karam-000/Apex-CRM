@@ -15,6 +15,18 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// On an expired/invalid JWT (401), clear the session and return to login.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401 && localStorage.getItem('apex_user')) {
+      localStorage.removeItem('apex_user');
+      window.location.reload();
+    }
+    return Promise.reject(error);
+  }
+);
+
 export const authService = {
   login: (email, password) => api.post('/auth/login', { email, password }),
   whoami: () => api.get('/auth/whoami'),
@@ -49,6 +61,10 @@ export const ticketService = {
   getSla: (id) => api.get(`/tickets/${id}/sla`),
 };
 
+export const emailService = {
+  send: (data) => api.post('/email/send', data),
+};
+
 export const activityService = {
   list: () => api.get('/activities'),
   create: (data) => api.post('/activities', data),
@@ -63,6 +79,41 @@ export const invoiceService = {
     }),
   update: (id, data) => api.patch(`/invoices/${id}`, data),
   remove: (id) => api.delete(`/invoices/${id}`),
+  pdf: (id) => api.get(`/invoices/${id}/pdf`, { responseType: 'blob' }),
+};
+
+export const productService = {
+  list: () => api.get('/products'),
+  create: (data) => api.post('/products', data),
+  update: (id, data) => api.put(`/products/${id}`, data),
+  remove: (id) => api.delete(`/products/${id}`),
+};
+
+export const quoteService = {
+  list: () => api.get('/quotes'),
+  get: (id) => api.get(`/quotes/${id}`),
+  create: (data) => api.post('/quotes', data),
+  setStatus: (id, status) => api.post(`/quotes/${id}/status`, null, { params: { status } }),
+  convert: (id) => api.post(`/quotes/${id}/convert`),
+  remove: (id) => api.delete(`/quotes/${id}`),
+  pdf: (id) => api.get(`/quotes/${id}/pdf`, { responseType: 'blob' }),
+};
+
+// Open a PDF blob (from quoteService.pdf / invoiceService.pdf) in a new tab.
+export const openPdfBlob = (blob) => {
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+};
+
+// Save a blob to disk with the given filename.
+export const downloadBlob = (blob, filename) => {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
 };
 
 export const workflowService = {
@@ -90,6 +141,15 @@ export const campaignService = {
   create: (data) => api.post('/campaigns', data),
   update: (id, data) => api.put(`/campaigns/${id}`, data),
   remove: (id) => api.delete(`/campaigns/${id}`),
+  send: (id, data) => api.post(`/campaigns/${id}/send`, data),
+  broadcast: ({ subject, body, file }) => {
+    const fd = new FormData();
+    fd.append('subject', subject);
+    fd.append('body', body);
+    fd.append('file', file);
+    return api.post('/campaigns/broadcast', fd);
+  },
+  sampleCsv: () => api.get('/campaigns/sample-csv', { responseType: 'blob' }),
 };
 
 export const reportService = {
