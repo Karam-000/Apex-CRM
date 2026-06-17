@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Shield, User, Users, Lock, Mail, AlertCircle } from 'lucide-react';
+import { Lock, Mail, AlertCircle, ArrowRight } from 'lucide-react';
 
 export default function Login({ onLogin }) {
   const [email, setEmail] = useState('');
@@ -11,9 +11,7 @@ export default function Login({ onLogin }) {
     e.preventDefault();
     setError('');
     setLoading(true);
-    
     const result = await onLogin(email, password);
-    
     if (!result.success) {
       setError(result.message);
       setLoading(false);
@@ -21,96 +19,64 @@ export default function Login({ onLogin }) {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
-      <div className="sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="flex justify-center">
-          <img src="/logo.png" alt="Apex CRM" className="h-16 w-auto" />
-        </div>
-        <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-          Apex CRM
-        </h2>
-        <p className="mt-2 text-center text-sm text-gray-600">
-          Sign in to your account
-        </p>
-      </div>
+    <div className="min-h-screen bg-surface flex items-center justify-center p-4">
+      <main className="w-full max-w-[420px]">
+        <div className="bg-surface-container-lowest rounded-xl shadow-sm border border-outline-variant p-8 sm:p-10">
+          <div className="flex flex-col items-center mb-8">
+            <img src="/logo.png" alt="Apex CRM" className="w-16 h-16 rounded-lg mb-6 object-contain border border-outline-variant/50 bg-surface-bright p-1 shadow-sm" />
+            <h1 className="text-2xl font-bold text-on-surface mb-2 text-center">Login to Apex</h1>
+            <p className="text-sm text-on-surface-variant text-center">Enter your details to access your dashboard.</p>
+          </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md flex items-center text-red-700 text-sm">
-              <AlertCircle className="h-4 w-4 mr-2" />
-              {error}
+            <div className="mb-6 bg-error-container border border-error/20 rounded-lg p-4 flex items-start gap-3" role="alert">
+              <AlertCircle className="h-5 w-5 text-error mt-0.5 flex-shrink-0" />
+              <div>
+                <h3 className="text-sm font-medium text-on-error-container">Sign in failed</h3>
+                <p className="text-xs text-on-error-container mt-1 opacity-90">{error}</p>
+              </div>
             </div>
           )}
 
-          <form className="space-y-6" onSubmit={handleSubmit}>
+          <form className="space-y-5" onSubmit={handleSubmit}>
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                Email address
-              </label>
-              <div className="mt-1 relative rounded-md shadow-sm">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Mail className="h-5 w-5 text-gray-400" />
-                </div>
+              <label htmlFor="email" className="block text-sm font-medium text-on-surface mb-1.5">Email address</label>
+              <div className="relative">
+                <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-5 w-5 text-outline" />
                 <input
-                  id="email"
-                  name="email"
-                  type="email"
-                  autoComplete="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="block w-full pl-10 sm:text-sm border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500 py-2 border"
-                  placeholder="you@example.com"
+                  id="email" type="email" autoComplete="email" required
+                  value={email} onChange={(e) => setEmail(e.target.value)}
+                  className="block w-full pl-10 pr-4 py-2.5 bg-surface-container-lowest border border-outline-variant rounded-lg text-sm text-on-surface placeholder:text-outline focus:outline-none focus:ring-2 focus:ring-primary-container/30 focus:border-primary-container transition-shadow"
+                  placeholder="name@company.com"
                 />
               </div>
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                Password
-              </label>
-              <div className="mt-1 relative rounded-md shadow-sm">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Lock className="h-5 w-5 text-gray-400" />
-                </div>
+              <label htmlFor="password" className="block text-sm font-medium text-on-surface mb-1.5">Password</label>
+              <div className="relative">
+                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-5 w-5 text-outline" />
                 <input
-                  id="password"
-                  name="password"
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="block w-full pl-10 sm:text-sm border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500 py-2 border"
+                  id="password" type="password" autoComplete="current-password" required
+                  value={password} onChange={(e) => setPassword(e.target.value)}
+                  className="block w-full pl-10 pr-4 py-2.5 bg-surface-container-lowest border border-outline-variant rounded-lg text-sm text-on-surface placeholder:text-outline focus:outline-none focus:ring-2 focus:ring-primary-container/30 focus:border-primary-container transition-shadow"
                   placeholder="••••••••"
                 />
               </div>
             </div>
 
-            <div>
-              <button
-                type="submit"
-                disabled={loading}
-                className={`w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                {loading ? 'Signing in...' : 'Sign in'}
-              </button>
-            </div>
+            <button
+              type="submit" disabled={loading}
+              className={`w-full flex justify-center items-center gap-2 py-2.5 px-4 rounded-lg text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-600 transition-colors ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              {loading ? 'Signing in...' : 'Sign In'}
+              {!loading && <ArrowRight className="h-5 w-5" />}
+            </button>
           </form>
-
-          <div className="mt-6">
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-gray-300"></div>
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-2 bg-white text-gray-500">Apex CRM Enterprise v1.0</span>
-              </div>
-            </div>
-          </div>
         </div>
-      </div>
+
+        <p className="mt-6 text-center text-xs text-outline">Apex CRM Enterprise v1.0</p>
+      </main>
     </div>
   );
 }

@@ -19,9 +19,13 @@ Apex CRM supports bulk importing of Contacts, Deals, and Agents using CSV files.
 ### Example (cURL)
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/bulk/upload/contacts" \
-  -H "Authorization: Bearer admin-dev-token" \
+  -H "Authorization: Bearer admin-1-token" \
   -F "file=@my_contacts.csv"
 ```
+
+> **Validation (v2)**: rows are imported individually. The response includes
+> `created_count`, `error_count`, and an `errors` list `[{ "line", "error" }]`
+> so a few malformed rows no longer fail the whole upload.
 
 ---
 

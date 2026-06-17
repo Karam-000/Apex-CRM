@@ -61,7 +61,7 @@ export default function Users() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
+      <h1 className="text-2xl font-bold text-on-surface">User Management</h1>
       <DataTable 
         title="System Users" 
         columns={columns} 
@@ -71,14 +71,14 @@ export default function Users() {
 
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+          <div className="bg-surface-container-lowest rounded-lg p-6 w-full max-w-md">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-bold">Create New User</h2>
               <button onClick={() => setShowModal(false)}><X className="h-6 w-6" /></button>
             </div>
             <form onSubmit={handleCreate} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700">Full Name</label>
+                <label className="block text-sm font-medium text-on-surface-variant">Full Name</label>
                 <input 
                   type="text" required
                   className="mt-1 block w-full border rounded-md p-2"
@@ -87,7 +87,7 @@ export default function Users() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">Email</label>
+                <label className="block text-sm font-medium text-on-surface-variant">Email</label>
                 <input 
                   type="email" required
                   className="mt-1 block w-full border rounded-md p-2"
@@ -96,7 +96,7 @@ export default function Users() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">Password</label>
+                <label className="block text-sm font-medium text-on-surface-variant">Password</label>
                 <input 
                   type="password" required
                   className="mt-1 block w-full border rounded-md p-2"
@@ -105,7 +105,7 @@ export default function Users() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">Role</label>
+                <label className="block text-sm font-medium text-on-surface-variant">Role</label>
                 <select 
                   className="mt-1 block w-full border rounded-md p-2"
                   value={formData.role_name}
@@ -117,7 +117,7 @@ export default function Users() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">Team ID</label>
+                <label className="block text-sm font-medium text-on-surface-variant">Team ID</label>
                 <input 
                   type="number" required
                   className="mt-1 block w-full border rounded-md p-2"

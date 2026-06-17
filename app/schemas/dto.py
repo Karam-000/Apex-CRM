@@ -137,6 +137,47 @@ class ConnectorOut(ConnectorCreate):
         from_attributes = True
 
 
+class ConnectorUpdate(BaseModel):
+    name: str | None = None
+    system_type: str | None = None
+    base_url: str | None = None
+    outbound_secret: str | None = None
+    is_active: int | None = None
+
+
+class ContactUpdate(BaseModel):
+    first_name: str | None = None
+    last_name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    job_title: str | None = None
+    lifecycle_stage: str | None = None
+    owner_user_id: int | None = None
+
+
+class DealUpdate(BaseModel):
+    account_id: int | None = None
+    primary_contact_id: int | None = None
+    amount: float | None = None
+    stage_id: int | None = None
+    win_probability: float | None = None
+    status: str | None = None
+
+
+class TicketUpdate(BaseModel):
+    subject: str | None = None
+    priority: str | None = None
+    status: str | None = None
+    category: str | None = None
+    assigned_user_id: int | None = None
+
+
+class InvoiceUpdate(BaseModel):
+    subtotal: float | None = None
+    tax: float | None = None
+    status: str | None = None
+
+
 class UserCreate(BaseModel):
     name: str
     email: str
@@ -155,6 +196,34 @@ class LoginResponse(BaseModel):
     name: str
     role: str
     token: str
+
+
+class CampaignCreate(BaseModel):
+    name: str
+    channel: str = "email"
+    status: str = "draft"
+    source: str | None = None
+    budget: float = 0
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+
+
+class CampaignUpdate(BaseModel):
+    name: str | None = None
+    channel: str | None = None
+    status: str | None = None
+    source: str | None = None
+    budget: float | None = None
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+
+
+class CampaignOut(CampaignCreate):
+    id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 class QuotaCreate(BaseModel):

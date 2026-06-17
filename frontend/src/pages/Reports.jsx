@@ -15,15 +15,17 @@ export default function Reports() {
   useEffect(() => {
     const fetchReports = async () => {
       try {
-        const [overview, funnel, activities] = await Promise.all([
+        const [overview, funnel, activities, channels] = await Promise.all([
           reportService.getOverview(),
           reportService.getFunnel(),
-          reportService.getActivities()
+          reportService.getActivities(),
+          reportService.getChannels()
         ]);
         setData({
           overview: overview.data,
           funnel: funnel.data,
-          activities: activities.data
+          activities: activities.data,
+          channels: channels.data
         });
       } catch (error) {
         console.error('Failed to fetch reports', error);
@@ -39,7 +41,7 @@ export default function Reports() {
   const pipelineData = data?.funnel?.map(item => ({
     stage: `Stage ${item.stage_id}`,
     count: item.count,
-    value: item.count * 1000 // Mock value for visualization
+    value: item.count
   })) || [];
 
   const activityData = data?.activities?.map(item => ({
@@ -47,19 +49,17 @@ export default function Reports() {
     count: item.count
   })) || [];
 
-  const channelData = [
-    { name: 'Email', value: 450 },
-    { name: 'WhatsApp', value: 300 },
-    { name: 'SMS', value: 150 },
-    { name: 'Chat', value: 200 },
-  ];
+  const channelData = (data?.channels || []).map(item => ({
+    name: item.channel,
+    value: item.outbound_count + item.inbound_count,
+  }));
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Analytics & Reports</h1>
+        <h1 className="text-2xl font-bold text-on-surface">Analytics & Reports</h1>
         <div className="flex space-x-2">
-          <button className="flex items-center px-4 py-2 border border-gray-300 rounded-md text-sm font-medium bg-white hover:bg-gray-50">
+          <button className="flex items-center px-4 py-2 border border-outline-variant rounded-md text-sm font-medium bg-surface-container-lowest hover:bg-surface-container-low">
             <Filter className="h-4 w-4 mr-2" />
             Filter
           </button>
@@ -72,8 +72,8 @@ export default function Reports() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Pipeline Value Chart */}
-        <div className="bg-white p-6 rounded-lg border border-gray-200 shadow-sm">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Pipeline Value by Stage</h2>
+        <div className="bg-surface-container-lowest p-6 rounded-lg border border-outline-variant shadow-sm">
+          <h2 className="text-lg font-semibold text-on-surface mb-4">Pipeline Value by Stage</h2>
           <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={pipelineData}>
@@ -88,8 +88,8 @@ export default function Reports() {
         </div>
 
         {/* Activity Trends */}
-        <div className="bg-white p-6 rounded-lg border border-gray-200 shadow-sm">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Activity Volume by Type</h2>
+        <div className="bg-surface-container-lowest p-6 rounded-lg border border-outline-variant shadow-sm">
+          <h2 className="text-lg font-semibold text-on-surface mb-4">Activity Volume by Type</h2>
           <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={activityData}>
@@ -104,8 +104,8 @@ export default function Reports() {
         </div>
 
         {/* Channel Distribution */}
-        <div className="bg-white p-6 rounded-lg border border-gray-200 shadow-sm">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Channel Distribution</h2>
+        <div className="bg-surface-container-lowest p-6 rounded-lg border border-outline-variant shadow-sm">
+          <h2 className="text-lg font-semibold text-on-surface mb-4">Channel Distribution</h2>
           <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -130,26 +130,26 @@ export default function Reports() {
         </div>
 
         {/* Key Metrics Summary */}
-        <div className="bg-white p-6 rounded-lg border border-gray-200 shadow-sm">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Metric Summary</h2>
+        <div className="bg-surface-container-lowest p-6 rounded-lg border border-outline-variant shadow-sm">
+          <h2 className="text-lg font-semibold text-on-surface mb-4">Metric Summary</h2>
           <div className="space-y-4">
-            <div className="flex justify-between items-center p-3 bg-gray-50 rounded-md">
-              <span className="text-sm text-gray-600">Total Contacts</span>
-              <span className="font-bold text-gray-900">{data?.overview?.core_totals?.contacts || 0}</span>
+            <div className="flex justify-between items-center p-3 bg-surface-container-low rounded-md">
+              <span className="text-sm text-on-surface-variant">Total Contacts</span>
+              <span className="font-bold text-on-surface">{data?.overview?.core_totals?.contacts || 0}</span>
             </div>
-            <div className="flex justify-between items-center p-3 bg-gray-50 rounded-md">
-              <span className="text-sm text-gray-600">SLA Breach Rate</span>
+            <div className="flex justify-between items-center p-3 bg-surface-container-low rounded-md">
+              <span className="text-sm text-on-surface-variant">SLA Breach Rate</span>
               <span className={`font-bold ${data?.overview?.sla?.breach_rate_pct > 20 ? 'text-red-600' : 'text-green-600'}`}>
                 {data?.overview?.sla?.breach_rate_pct || 0}%
               </span>
             </div>
-            <div className="flex justify-between items-center p-3 bg-gray-50 rounded-md">
-              <span className="text-sm text-gray-600">Open Tickets</span>
-              <span className="font-bold text-gray-900">{data?.overview?.core_totals?.open_tickets || 0}</span>
+            <div className="flex justify-between items-center p-3 bg-surface-container-low rounded-md">
+              <span className="text-sm text-on-surface-variant">Open Tickets</span>
+              <span className="font-bold text-on-surface">{data?.overview?.core_totals?.open_tickets || 0}</span>
             </div>
-            <div className="flex justify-between items-center p-3 bg-gray-50 rounded-md">
-              <span className="text-sm text-gray-600">Open Deals</span>
-              <span className="font-bold text-gray-900">{data?.overview?.core_totals?.open_deals || 0}</span>
+            <div className="flex justify-between items-center p-3 bg-surface-container-low rounded-md">
+              <span className="text-sm text-on-surface-variant">Open Deals</span>
+              <span className="font-bold text-on-surface">{data?.overview?.core_totals?.open_deals || 0}</span>
             </div>
           </div>
         </div>

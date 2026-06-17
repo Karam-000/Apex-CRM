@@ -1,5 +1,5 @@
 from app.core.db import Base, SessionLocal, engine
-from app.core.security import hash_token
+from app.core.security import hash_password, hash_token
 from app.models.entities import (
     Account,
     ApiCredential,
@@ -28,10 +28,10 @@ def run_seed(db) -> None:
         if existing:
             # Update password if not set
             if not existing.password_hash:
-                existing.password_hash = hash_token(password)
+                existing.password_hash = hash_password(password)
                 db.flush()
             return existing
-        existing = User(name=name, email=email, role_id=role_id, team_id=team_id, password_hash=hash_token(password))
+        existing = User(name=name, email=email, role_id=role_id, team_id=team_id, password_hash=hash_password(password))
         db.add(existing)
         db.flush()
         return existing
@@ -99,7 +99,7 @@ def run_seed(db) -> None:
     
     has_quota = db.query(QuotaTarget).filter(QuotaTarget.user_id == agent.id, QuotaTarget.period_month == "2026-04").first()
     if not has_quota:
-        db.add(QuotaTarget(user_id=agent.id, period_month="2026-04", target_amount=100000, current_actual=45000))
+        db.add(QuotaTarget(user_id=agent.id, period_month="2026-04", quota_amount=100000, set_by_user_id=admin.id))
 
     if db.query(TicketSLAPolicy).filter(TicketSLAPolicy.name == "Default Medium").first() is None:
         db.add(

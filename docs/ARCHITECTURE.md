@@ -8,7 +8,8 @@ This project uses a modular monolith architecture:
 - `app/models`: SQLAlchemy relational schema
 - `app/services`: domain logic (scoring, workflow, connectors)
 - `app/core`: DB session and base model
-- `app/core/security.py`: token authentication and RBAC helpers
+- `app/core/security.py`: bcrypt password hashing, Bearer API-token auth, and RBAC helpers
+- `app/main.py`: also serves the built React app (`frontend/dist`) so the API and UI run as one process
 
 The design is event-aware and explainable:
 
@@ -18,8 +19,8 @@ The design is event-aware and explainable:
 
 ## Core Modules
 
-- Contacts and Accounts
-- Deals and Pipeline
+- Leads (early-stage contacts) and Contacts and Accounts
+- Deals, Pipeline (kanban), and Campaigns
 - Activities
 - Omnichannel Messages
 - Invoices and Payments
@@ -58,5 +59,6 @@ The design is event-aware and explainable:
 - Suitable for single app process in early stages
 - Add workers for scheduled jobs and event processing when scaling
 - Current role model: `admin`, `supervisor`, `agent`
-- All API routes are protected by Bearer token auth
+- Passwords are hashed with bcrypt; API routes are protected by Bearer tokens
+- The login route is public; all other routes require authentication
 - Upgrade to short-lived JWT/OAuth tokens in production

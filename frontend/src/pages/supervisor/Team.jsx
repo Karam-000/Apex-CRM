@@ -35,7 +35,7 @@ export default function Team() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Team Management</h1>
+      <h1 className="text-2xl font-bold text-on-surface">Team Management</h1>
       <DataTable title="Team Agents" columns={columns} data={agents} />
     </div>
   );

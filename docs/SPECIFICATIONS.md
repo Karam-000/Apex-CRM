@@ -32,7 +32,7 @@
 
 ### 4. Real-time Communication
 - **Connectivity**: Outbound push connectors rely on external system availability.
-- **Limit**: There is no built-in retry mechanism for failed webhook deliveries in the current version (v0.1.0). Failed attempts are logged in `connector_sync_logs` for manual review.
+- **Limit**: There is no built-in retry mechanism for failed webhook deliveries in the current version (v2.0.0). Failed attempts are logged in `connector_sync_logs` for manual review.
 
 ### 5. Deployment
 - **Architecture**: Designed as a **Modular Monolith**. It is not currently architected for distributed microservices.

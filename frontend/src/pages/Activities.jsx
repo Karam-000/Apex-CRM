@@ -119,7 +119,7 @@ export default function Activities({ user }) {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Activities</h1>
+        <h1 className="text-2xl font-bold text-on-surface">Activities</h1>
       </div>
       
       <DataTable 
@@ -131,26 +131,26 @@ export default function Activities({ user }) {
 
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+          <div className="bg-surface-container-lowest rounded-lg p-6 w-full max-w-md">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-bold">Assign New Task</h2>
               <button onClick={() => setShowModal(false)}><X className="h-6 w-6" /></button>
             </div>
             <form onSubmit={handleCreate} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700">Subject</label>
+                <label className="block text-sm font-medium text-on-surface-variant">Subject</label>
                 <input 
                   type="text" 
                   required
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                  className="mt-1 block w-full border border-outline-variant rounded-md shadow-sm py-2 px-3 focus:ring-primary-container focus:border-primary-container sm:text-sm"
                   value={formData.subject}
                   onChange={e => setFormData({...formData, subject: e.target.value})}
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">Type</label>
+                <label className="block text-sm font-medium text-on-surface-variant">Type</label>
                 <select 
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                  className="mt-1 block w-full border border-outline-variant rounded-md shadow-sm py-2 px-3 focus:ring-primary-container focus:border-primary-container sm:text-sm"
                   value={formData.type}
                   onChange={e => setFormData({...formData, type: e.target.value})}
                 >
@@ -161,9 +161,9 @@ export default function Activities({ user }) {
               </div>
                 {isSupervisor && (
                   <div className="sm:col-span-4">
-                    <label className="block text-sm font-medium text-gray-700">Assign To Agent</label>
+                    <label className="block text-sm font-medium text-on-surface-variant">Assign To Agent</label>
                     <select 
-                      className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                      className="mt-1 block w-full border border-outline-variant rounded-md shadow-sm py-2 px-3 focus:ring-primary-container focus:border-primary-container sm:text-sm"
                       value={formData.owner_user_id}
                       onChange={e => setFormData({...formData, owner_user_id: parseInt(e.target.value)})}
                     >
@@ -177,7 +177,7 @@ export default function Activities({ user }) {
               <div className="pt-4">
                 <button 
                   type="submit"
-                  className="w-full inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                  className="w-full inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-container"
                 >
                   Create Activity
                 </button>

@@ -28,7 +28,12 @@ env/
 
 # Local database
 crm.db
+crm.db-wal
+crm.db-shm
 *.sqlite3
+
+# Database backups (runtime data)
+backups/
 
 # Frontend dependencies
 frontend/node_modules/

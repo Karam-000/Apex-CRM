@@ -1,5 +1,6 @@
 import csv
 import io
+import secrets
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -10,7 +11,15 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.core.db import engine, get_db
-from app.core.security import AuthContext, ensure_roles, hash_token, require_auth
+from app.core.security import (
+    AuthContext,
+    ensure_roles,
+    hash_password,
+    hash_token,
+    is_legacy_hash,
+    require_auth,
+    verify_password,
+)
 from app.models.entities import (
     Account,
     Activity,
@@ -18,6 +27,7 @@ from app.models.entities import (
     ApprovalRequest,
     AuditLog,
     BackupLog,
+    Campaign,
     Contact,
     ContactConsent,
     ConnectorIntegration,
@@ -50,10 +60,18 @@ from app.schemas.dto import (
     ConsentCreate,
     ContactCreate,
     ContactOut,
+    CampaignCreate,
+    CampaignOut,
+    CampaignUpdate,
     ConnectorCreate,
     ConnectorOut,
+    ConnectorUpdate,
+    ContactUpdate,
     DealCreate,
     DealOut,
+    DealUpdate,
+    InvoiceUpdate,
+    TicketUpdate,
     UserCreate,
     LoginRequest,
     LoginResponse,
@@ -78,6 +96,11 @@ from app.services.scoring import (
 )
 from app.services.workflow import evaluate_condition, execute_action
 
+# Public routes that must be reachable WITHOUT a bearer token (e.g. login).
+public_router = APIRouter()
+
+# All other routes require authentication. Note many handlers also declare an
+# `auth` parameter to read the caller's identity/role.
 router = APIRouter(dependencies=[Depends(require_auth)])
 
 
@@ -128,6 +151,17 @@ def can_view_user_scope(user_id: int | None, auth: AuthContext, db: Session) -> 
     return False
 
 
+def ensure_can_modify(owner_user_id: int | None, auth: AuthContext, db: Session) -> None:
+    """Raise 403 unless the caller is allowed to edit/delete a record with this owner."""
+    if not can_view_user_scope(owner_user_id, auth, db):
+        raise HTTPException(status_code=403, detail="Not allowed to modify this record.")
+
+
+def generate_api_key() -> str:
+    """Generate a URL-safe API key that secures a connector integration."""
+    return f"apex_{secrets.token_urlsafe(32)}"
+
+
 @router.get("/auth/whoami")
 def whoami(auth: AuthContext = Depends(require_auth), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == auth.user_id).first()
@@ -139,16 +173,21 @@ def whoami(auth: AuthContext = Depends(require_auth), db: Session = Depends(get_
     }
 
 
-@router.post("/auth/login", response_model=LoginResponse)
+@public_router.post("/auth/login", response_model=LoginResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    # Check password hash
-    if not user.password_hash or hash_token(payload.password) != user.password_hash:
+
+    # Verify password (bcrypt, with legacy SHA-256 fallback).
+    if not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    
+
+    # Transparently upgrade legacy hashes to bcrypt on successful login.
+    if is_legacy_hash(user.password_hash):
+        user.password_hash = hash_password(payload.password)
+        db.commit()
+
     # Find or create a token for the user
     cred = db.query(ApiCredential).filter(ApiCredential.user_id == user.id, ApiCredential.is_active == 1).first()
     
@@ -203,6 +242,75 @@ def create_contact(payload: ContactCreate, db: Session = Depends(get_db), auth: 
     return contact
 
 
+@router.get("/leads")
+def list_leads(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    """Contacts in early lifecycle stages, with their latest lead score."""
+    query = db.query(Contact).filter(Contact.lifecycle_stage.in_(["lead", "mql", "sql"]))
+    if auth.role == "agent":
+        query = query.filter(Contact.owner_user_id == auth.user_id)
+    elif auth.role == "supervisor":
+        ids = team_user_ids(db, auth.team_id)
+        query = query.filter(Contact.owner_user_id.in_(ids)) if ids else query.filter(Contact.owner_user_id == auth.user_id)
+    rows = query.order_by(Contact.id.desc()).all()
+    result = []
+    for c in rows:
+        score = db.query(LeadScore).filter(LeadScore.contact_id == c.id).order_by(LeadScore.id.desc()).first()
+        result.append({
+            "id": c.id,
+            "first_name": c.first_name,
+            "last_name": c.last_name,
+            "email": c.email,
+            "phone": c.phone,
+            "job_title": c.job_title,
+            "lifecycle_stage": c.lifecycle_stage,
+            "owner_user_id": c.owner_user_id,
+            "score": score.score if score else None,
+            "grade": score.grade if score else None,
+        })
+    return result
+
+
+@router.get("/campaigns", response_model=list[CampaignOut])
+def list_campaigns(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    return db.query(Campaign).order_by(Campaign.id.desc()).all()
+
+
+@router.post("/campaigns", response_model=CampaignOut)
+def create_campaign(payload: CampaignCreate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin", "supervisor"})
+    row = Campaign(**payload.model_dump(), created_by=auth.user_id)
+    db.add(row)
+    log_audit(db, "campaign", 0, "create", payload.model_dump(mode="json"))
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.put("/campaigns/{campaign_id}", response_model=CampaignOut)
+def update_campaign(campaign_id: int, payload: CampaignUpdate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin", "supervisor"})
+    row = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(row, field, value)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.delete("/campaigns/{campaign_id}")
+def delete_campaign(campaign_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin", "supervisor"})
+    row = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    db.delete(row)
+    log_audit(db, "campaign", campaign_id, "delete", {})
+    db.commit()
+    return {"status": "deleted", "id": campaign_id}
+
+
 @router.post("/accounts", response_model=AccountOut)
 def create_account(payload: AccountCreate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
     if auth.role == "agent":
@@ -236,6 +344,43 @@ def list_contacts(db: Session = Depends(get_db), auth: AuthContext = Depends(req
         ids = team_user_ids(db, auth.team_id)
         query = query.filter(Contact.owner_user_id.in_(ids)) if ids else query.filter(Contact.owner_user_id == auth.user_id)
     return query.order_by(Contact.id.desc()).all()
+
+
+@router.put("/contacts/{contact_id}", response_model=ContactOut)
+def update_contact(contact_id: int, payload: ContactUpdate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="contact not found")
+    ensure_can_modify(contact.owner_user_id, auth, db)
+    updates = payload.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(contact, field, value)
+    log_audit(db, "contact", contact.id, "update", updates)
+    db.commit()
+    db.refresh(contact)
+    return contact
+
+
+@router.delete("/contacts/{contact_id}")
+def delete_contact(contact_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="contact not found")
+    ensure_can_modify(contact.owner_user_id, auth, db)
+    # Remove dependent rows that require a contact (NOT NULL FKs).
+    db.query(CustomerEvent).filter(CustomerEvent.contact_id == contact_id).delete()
+    db.query(LeadAttribution).filter(LeadAttribution.contact_id == contact_id).delete()
+    db.query(ContactConsent).filter(ContactConsent.contact_id == contact_id).delete()
+    db.query(LeadScore).filter(LeadScore.contact_id == contact_id).delete()
+    db.query(Message).filter(Message.contact_id == contact_id).delete()
+    # Detach optional references on other records.
+    db.query(Activity).filter(Activity.contact_id == contact_id).update({Activity.contact_id: None})
+    db.query(Deal).filter(Deal.primary_contact_id == contact_id).update({Deal.primary_contact_id: None})
+    db.query(Ticket).filter(Ticket.contact_id == contact_id).update({Ticket.contact_id: None})
+    db.delete(contact)
+    log_audit(db, "contact", contact_id, "delete", {})
+    db.commit()
+    return {"status": "deleted", "id": contact_id}
 
 
 @router.post("/deals", response_model=DealOut)
@@ -273,6 +418,33 @@ def list_deals(db: Session = Depends(get_db), auth: AuthContext = Depends(requir
         ids = team_user_ids(db, auth.team_id)
         query = query.filter(Deal.owner_user_id.in_(ids)) if ids else query.filter(Deal.owner_user_id == auth.user_id)
     return query.order_by(Deal.id.desc()).all()
+
+
+@router.put("/deals/{deal_id}", response_model=DealOut)
+def update_deal(deal_id: int, payload: DealUpdate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    deal = db.query(Deal).filter(Deal.id == deal_id).first()
+    if not deal:
+        raise HTTPException(status_code=404, detail="deal not found")
+    ensure_can_modify(deal.owner_user_id, auth, db)
+    updates = payload.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(deal, field, value)
+    log_audit(db, "deal", deal.id, "update", updates)
+    db.commit()
+    db.refresh(deal)
+    return deal
+
+
+@router.delete("/deals/{deal_id}")
+def delete_deal(deal_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    deal = db.query(Deal).filter(Deal.id == deal_id).first()
+    if not deal:
+        raise HTTPException(status_code=404, detail="deal not found")
+    ensure_can_modify(deal.owner_user_id, auth, db)
+    db.delete(deal)
+    log_audit(db, "deal", deal_id, "delete", {})
+    db.commit()
+    return {"status": "deleted", "id": deal_id}
 
 
 @router.get("/activities")
@@ -480,6 +652,67 @@ def ticket_sla(ticket_id: int, db: Session = Depends(get_db), auth: AuthContext 
     }
 
 
+@router.get("/workflows")
+def list_workflows(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin"})
+    rows = db.query(WorkflowDefinition).order_by(WorkflowDefinition.id.desc()).all()
+    result = []
+    for w in rows:
+        rule_count = db.query(func.count(WorkflowRule.id)).filter(WorkflowRule.workflow_id == w.id).scalar() or 0
+        result.append(
+            {
+                "id": w.id,
+                "name": w.name,
+                "trigger_type": w.trigger_type,
+                "is_active": w.is_active,
+                "rule_count": int(rule_count),
+            }
+        )
+    return result
+
+
+def _can_modify_ticket(ticket: Ticket, auth: AuthContext, db: Session) -> bool:
+    if auth.role == "admin":
+        return True
+    if auth.role == "supervisor":
+        return ticket.assigned_user_id in (team_user_ids(db, auth.team_id) + [auth.user_id, None])
+    return ticket.assigned_user_id in (auth.user_id, None)
+
+
+@router.put("/tickets/{ticket_id}")
+def update_ticket(ticket_id: int, payload: TicketUpdate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="ticket not found")
+    if not _can_modify_ticket(ticket, auth, db):
+        raise HTTPException(status_code=403, detail="Not allowed to modify this ticket.")
+    updates = payload.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(ticket, field, value)
+    if updates.get("status") == "resolved" and ticket.resolved_at is None:
+        ticket.resolved_at = datetime.utcnow()
+        tracking = db.query(TicketSLATracking).filter(TicketSLATracking.ticket_id == ticket_id).first()
+        if tracking:
+            tracking.resolved_at = ticket.resolved_at
+    log_audit(db, "ticket", ticket.id, "update", updates)
+    db.commit()
+    return {"id": ticket.id, "status": "updated"}
+
+
+@router.delete("/tickets/{ticket_id}")
+def delete_ticket(ticket_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="ticket not found")
+    if not _can_modify_ticket(ticket, auth, db):
+        raise HTTPException(status_code=403, detail="Not allowed to delete this ticket.")
+    db.query(TicketSLATracking).filter(TicketSLATracking.ticket_id == ticket_id).delete()
+    db.delete(ticket)
+    log_audit(db, "ticket", ticket_id, "delete", {})
+    db.commit()
+    return {"status": "deleted", "id": ticket_id}
+
+
 @router.post("/workflows")
 def create_workflow(payload: WorkflowDefinitionCreate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
     ensure_roles(auth, {"admin"})
@@ -488,6 +721,19 @@ def create_workflow(payload: WorkflowDefinitionCreate, db: Session = Depends(get
     db.commit()
     db.refresh(row)
     return {"id": row.id}
+
+
+@router.delete("/workflows/{workflow_id}")
+def delete_workflow(workflow_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin"})
+    workflow = db.query(WorkflowDefinition).filter(WorkflowDefinition.id == workflow_id).first()
+    if not workflow:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    db.query(WorkflowRule).filter(WorkflowRule.workflow_id == workflow_id).delete()
+    db.delete(workflow)
+    log_audit(db, "workflow_definition", workflow_id, "delete", {})
+    db.commit()
+    return {"status": "deleted", "id": workflow_id}
 
 
 @router.post("/workflow-rules")
@@ -802,11 +1048,15 @@ def analytics_overview(db: Session = Depends(get_db), auth: AuthContext = Depend
 @router.post("/connectors", response_model=ConnectorOut)
 def create_connector(payload: ConnectorCreate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
     ensure_roles(auth, {"admin"})
-    row = ConnectorIntegration(**payload.model_dump())
+    data = payload.model_dump()
+    # Auto-generate an API key that secures this integration if none was provided.
+    if not data.get("api_key"):
+        data["api_key"] = generate_api_key()
+    row = ConnectorIntegration(**data)
     db.add(row)
     db.commit()
     db.refresh(row)
-    log_audit(db, "connector_integration", row.id, "create", payload.model_dump())
+    log_audit(db, "connector_integration", row.id, "create", {k: v for k, v in data.items() if k != "api_key"})
     db.commit()
     return row
 
@@ -815,6 +1065,59 @@ def create_connector(payload: ConnectorCreate, db: Session = Depends(get_db), au
 def list_connectors(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
     ensure_roles(auth, {"admin"})
     return db.query(ConnectorIntegration).order_by(ConnectorIntegration.id.desc()).all()
+
+
+def _get_connector_or_404(connector_id: int, db: Session) -> ConnectorIntegration:
+    connector = db.query(ConnectorIntegration).filter(ConnectorIntegration.id == connector_id).first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="connector not found")
+    return connector
+
+
+@router.put("/connectors/{connector_id}", response_model=ConnectorOut)
+def update_connector(connector_id: int, payload: ConnectorUpdate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin"})
+    connector = _get_connector_or_404(connector_id, db)
+    updates = payload.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(connector, field, value)
+    log_audit(db, "connector_integration", connector.id, "update", updates)
+    db.commit()
+    db.refresh(connector)
+    return connector
+
+
+@router.delete("/connectors/{connector_id}")
+def delete_connector(connector_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin"})
+    connector = _get_connector_or_404(connector_id, db)
+    # Remove sync logs tied to this connector first.
+    db.query(ConnectorSyncLog).filter(ConnectorSyncLog.connector_id == connector_id).delete()
+    db.delete(connector)
+    log_audit(db, "connector_integration", connector_id, "delete", {})
+    db.commit()
+    return {"status": "deleted", "id": connector_id}
+
+
+@router.post("/connectors/{connector_id}/regenerate-key", response_model=ConnectorOut)
+def regenerate_connector_key(connector_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin"})
+    connector = _get_connector_or_404(connector_id, db)
+    connector.api_key = generate_api_key()
+    log_audit(db, "connector_integration", connector.id, "regenerate_key", {})
+    db.commit()
+    db.refresh(connector)
+    return connector
+
+
+@router.delete("/connectors/{connector_id}/key")
+def delete_connector_key(connector_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin"})
+    connector = _get_connector_or_404(connector_id, db)
+    connector.api_key = None
+    log_audit(db, "connector_integration", connector.id, "delete_key", {})
+    db.commit()
+    return {"status": "key_deleted", "id": connector_id}
 
 
 @router.post("/connectors/{connector_id}/test")
@@ -1040,6 +1343,65 @@ def create_payment(invoice_id: int, amount: float, method: str = "bank_transfer"
     return {"id": row.id, "status": row.status}
 
 
+@router.get("/invoices")
+def list_invoices(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    query = db.query(Invoice)
+    if auth.role != "admin":
+        # Non-admins only see invoices tied to deals they (or their team) own.
+        if auth.role == "supervisor":
+            owner_ids = team_user_ids(db, auth.team_id) or [auth.user_id]
+        else:
+            owner_ids = [auth.user_id]
+        deal_ids = [d.id for d in db.query(Deal.id).filter(Deal.owner_user_id.in_(owner_ids)).all()]
+        query = query.filter(Invoice.deal_id.in_(deal_ids)) if deal_ids else query.filter(Invoice.id == -1)
+    rows = query.order_by(Invoice.id.desc()).all()
+    return [
+        {
+            "id": r.id,
+            "invoice_number": r.invoice_number,
+            "account_id": r.account_id,
+            "deal_id": r.deal_id,
+            "subtotal": float(r.subtotal or 0),
+            "tax": float(r.tax or 0),
+            "total": float(r.total or 0),
+            "status": r.status,
+            "issue_date": r.issue_date,
+            "due_date": r.due_date,
+        }
+        for r in rows
+    ]
+
+
+@router.patch("/invoices/{invoice_id}")
+def update_invoice(invoice_id: int, payload: InvoiceUpdate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin", "supervisor"})
+    inv = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="invoice not found")
+    updates = payload.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(inv, field, value)
+    # Recompute total if money fields changed.
+    if "subtotal" in updates or "tax" in updates:
+        inv.total = float(inv.subtotal or 0) + float(inv.tax or 0)
+    log_audit(db, "invoice", inv.id, "update", updates)
+    db.commit()
+    return {"id": inv.id, "total": float(inv.total), "status": inv.status}
+
+
+@router.delete("/invoices/{invoice_id}")
+def delete_invoice(invoice_id: int, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin", "supervisor"})
+    inv = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="invoice not found")
+    db.query(Payment).filter(Payment.invoice_id == invoice_id).delete()
+    db.delete(inv)
+    log_audit(db, "invoice", invoice_id, "delete", {})
+    db.commit()
+    return {"status": "deleted", "id": invoice_id}
+
+
 @router.post("/admin/users")
 def admin_create_user(payload: UserCreate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
     ensure_roles(auth, {"admin"})
@@ -1049,10 +1411,10 @@ def admin_create_user(payload: UserCreate, db: Session = Depends(get_db), auth: 
         db.add(role)
         db.flush()
     
-    password_hash = hash_token(payload.password) if payload.password else hash_token("apex123")
-    
+    password_hash = hash_password(payload.password) if payload.password else hash_password("apex123")
+
     user = User(
-        name=payload.name, 
+        name=payload.name,
         email=payload.email, 
         password_hash=password_hash,
         role_id=role.id, 
@@ -1080,6 +1442,22 @@ def admin_list_users(db: Session = Depends(get_db), auth: AuthContext = Depends(
     ensure_roles(auth, {"admin"})
     rows = db.query(User, Role.name).join(Role, Role.id == User.role_id, isouter=True).order_by(User.id.asc()).all()
     return [{"id": u.id, "name": u.name, "email": u.email, "role": role_name or "unknown", "team_id": u.team_id} for u, role_name in rows]
+
+
+@router.get("/admin/settings")
+def list_settings(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    ensure_roles(auth, {"admin"})
+    rows = db.query(CRMSetting).order_by(CRMSetting.id.desc()).all()
+    return [
+        {
+            "id": r.id,
+            "category": r.category,
+            "key": r.key,
+            "value_json": r.value_json,
+            "updated_at": r.updated_at,
+        }
+        for r in rows
+    ]
 
 
 @router.post("/admin/settings")
@@ -1115,6 +1493,34 @@ def set_quota(payload: QuotaCreate, db: Session = Depends(get_db), auth: AuthCon
     db.add(row)
     db.commit()
     return {"id": row.id}
+
+
+@router.get("/approvals")
+def list_approvals(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
+    query = db.query(ApprovalRequest)
+    if auth.role == "agent":
+        query = query.filter(ApprovalRequest.requested_by == auth.user_id)
+    elif auth.role == "supervisor":
+        ids = team_user_ids(db, auth.team_id) or [auth.user_id]
+        query = query.filter(ApprovalRequest.requested_by.in_(ids))
+    rows = query.order_by(ApprovalRequest.id.desc()).all()
+    # Resolve requester names for display.
+    user_names = {u.id: u.name for u in db.query(User).all()}
+    return [
+        {
+            "id": r.id,
+            "request_type": r.request_type,
+            "entity_type": r.entity_type,
+            "entity_id": r.entity_id,
+            "requested_by": r.requested_by,
+            "requested_by_name": user_names.get(r.requested_by, "Unknown"),
+            "status": r.status,
+            "notes": r.notes,
+            "created_at": r.created_at,
+            "decided_at": r.decided_at,
+        }
+        for r in rows
+    ]
 
 
 @router.post("/approvals")
@@ -1166,58 +1572,72 @@ def download_csv_template(entity: str, auth: AuthContext = Depends(require_auth)
 @router.post("/bulk/upload/{entity}")
 def bulk_upload(entity: str, file: UploadFile = File(...), db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
     ensure_roles(auth, {"admin", "supervisor"})
-    content = file.file.read().decode("utf-8")
+    if entity not in {"contacts", "deals", "agents"}:
+        raise HTTPException(status_code=400, detail="Unsupported entity for bulk upload.")
+    if entity == "agents":
+        ensure_roles(auth, {"admin"})
+    try:
+        content = file.file.read().decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded CSV.")
     reader = csv.DictReader(io.StringIO(content))
     created_count = 0
-    for row in reader:
-        if entity == "contacts":
-            contact = Contact(
-                account_id=int(row["account_id"]) if row.get("account_id") else None,
-                first_name=row.get("first_name", ""),
-                last_name=row.get("last_name", ""),
-                email=row.get("email"),
-                phone=row.get("phone"),
-                job_title=row.get("job_title"),
-                lifecycle_stage=row.get("lifecycle_stage") or "lead",
-                owner_user_id=int(row["owner_user_id"]) if row.get("owner_user_id") else auth.user_id,
-            )
-            db.add(contact)
-            db.flush()
-            if row.get("lead_source"):
-                db.add(LeadAttribution(contact_id=contact.id, source=row["lead_source"]))
-            created_count += 1
-        elif entity == "deals":
-            deal = Deal(
-                account_id=int(row["account_id"]) if row.get("account_id") else None,
-                primary_contact_id=int(row["primary_contact_id"]) if row.get("primary_contact_id") else None,
-                pipeline_id=int(row["pipeline_id"]) if row.get("pipeline_id") else 1,
-                stage_id=int(row["stage_id"]) if row.get("stage_id") else 1,
-                amount=float(row.get("amount") or 0),
-                currency=row.get("currency") or "USD",
-                owner_user_id=int(row["owner_user_id"]) if row.get("owner_user_id") else auth.user_id,
-                win_probability=float(row.get("win_probability") or 0.2),
-                status=row.get("status") or "open",
-            )
-            db.add(deal)
-            created_count += 1
-        elif entity == "agents":
-            ensure_roles(auth, {"admin"})
-            role_name = row.get("role_name") or "agent"
-            role = db.query(Role).filter(Role.name == role_name).first()
-            if not role:
-                role = Role(name=role_name, permissions_json={})
-                db.add(role)
+    errors: list[dict] = []
+    # row 1 is the header, so data rows start at line 2
+    for line_no, row in enumerate(reader, start=2):
+        try:
+            if entity == "contacts":
+                if not (row.get("first_name") or row.get("last_name")):
+                    raise ValueError("first_name or last_name is required")
+                contact = Contact(
+                    account_id=int(row["account_id"]) if row.get("account_id") else None,
+                    first_name=row.get("first_name", ""),
+                    last_name=row.get("last_name", ""),
+                    email=row.get("email"),
+                    phone=row.get("phone"),
+                    job_title=row.get("job_title"),
+                    lifecycle_stage=row.get("lifecycle_stage") or "lead",
+                    owner_user_id=int(row["owner_user_id"]) if row.get("owner_user_id") else auth.user_id,
+                )
+                db.add(contact)
                 db.flush()
-            user = User(name=row.get("name", ""), email=row.get("email", ""), role_id=role.id, team_id=int(row["team_id"]) if row.get("team_id") else None)
-            db.add(user)
-            db.flush()
-            token_plain = f"{role_name}-{user.id}-token"
-            db.add(ApiCredential(user_id=user.id, role_name=role_name, team_id=user.team_id, token_hash=hash_token(token_plain), is_active=1))
+                if row.get("lead_source"):
+                    db.add(LeadAttribution(contact_id=contact.id, source=row["lead_source"]))
+            elif entity == "deals":
+                deal = Deal(
+                    account_id=int(row["account_id"]) if row.get("account_id") else None,
+                    primary_contact_id=int(row["primary_contact_id"]) if row.get("primary_contact_id") else None,
+                    pipeline_id=int(row["pipeline_id"]) if row.get("pipeline_id") else 1,
+                    stage_id=int(row["stage_id"]) if row.get("stage_id") else 1,
+                    amount=float(row.get("amount") or 0),
+                    currency=row.get("currency") or "USD",
+                    owner_user_id=int(row["owner_user_id"]) if row.get("owner_user_id") else auth.user_id,
+                    win_probability=float(row.get("win_probability") or 0.2),
+                    status=row.get("status") or "open",
+                )
+                db.add(deal)
+                db.flush()
+            elif entity == "agents":
+                if not row.get("email"):
+                    raise ValueError("email is required")
+                role_name = row.get("role_name") or "agent"
+                role = db.query(Role).filter(Role.name == role_name).first()
+                if not role:
+                    role = Role(name=role_name, permissions_json={})
+                    db.add(role)
+                    db.flush()
+                user = User(name=row.get("name", ""), email=row.get("email", ""), role_id=role.id, team_id=int(row["team_id"]) if row.get("team_id") else None)
+                db.add(user)
+                db.flush()
+                token_plain = f"{role_name}-{user.id}-token"
+                db.add(ApiCredential(user_id=user.id, role_name=role_name, team_id=user.team_id, token_hash=hash_token(token_plain), is_active=1))
+            # Commit per row so one bad row does not roll back earlier good rows.
+            db.commit()
             created_count += 1
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported entity for bulk upload.")
-    db.commit()
-    return {"entity": entity, "created_count": created_count}
+        except (ValueError, KeyError) as exc:
+            db.rollback()
+            errors.append({"line": line_no, "error": str(exc)})
+    return {"entity": entity, "created_count": created_count, "error_count": len(errors), "errors": errors}
 
 
 def _create_backup_file(backup_type: str, triggered_by: int | None, db: Session) -> dict:
@@ -1258,7 +1678,11 @@ def list_backups(db: Session = Depends(get_db), auth: AuthContext = Depends(requ
 @router.post("/admin/backups/restore")
 def restore_backup(file_path: str, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)):
     ensure_roles(auth, {"admin"})
-    source = Path(file_path)
+    backups_dir = Path("backups").resolve()
+    source = Path(file_path).resolve()
+    # Prevent path traversal: only allow restoring files that live inside ./backups.
+    if backups_dir != source.parent:
+        raise HTTPException(status_code=400, detail="Backup file must be inside the backups directory.")
     if not source.exists():
         raise HTTPException(status_code=404, detail="Backup file not found.")
     engine.dispose()
@@ -1336,7 +1760,7 @@ def report_lead_response_time(db: Session = Depends(get_db), auth: AuthContext =
     for c in contacts:
         first_activity = db.query(Activity).filter(Activity.contact_id == c.id).order_by(Activity.id.asc()).first()
         if first_activity:
-            delta = (c.created_at - c.created_at) if first_activity is None else (first_activity.completed_at or datetime.utcnow()) - c.created_at
+            delta = (first_activity.completed_at or datetime.utcnow()) - c.created_at
             samples.append(max(delta.total_seconds() / 60.0, 0))
     avg_minutes = round(sum(samples) / len(samples), 2) if samples else 0
     return {"average_first_response_minutes": avg_minutes, "sample_size": len(samples)}

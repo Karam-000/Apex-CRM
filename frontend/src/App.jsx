@@ -2,7 +2,10 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { useState, useEffect } from 'react';
 import MainLayout from './layouts/MainLayout';
 import Dashboard from './pages/Dashboard';
+import Leads from './pages/Leads';
 import Contacts from './pages/Contacts';
+import Pipeline from './pages/Pipeline';
+import Campaigns from './pages/Campaigns';
 import Deals from './pages/Deals';
 import Tickets from './pages/Tickets';
 import Invoices from './pages/Invoices';
@@ -65,7 +68,10 @@ function App() {
       <MainLayout user={user} onLogout={logout}>
         <Routes>
           <Route path="/" element={<Dashboard user={user} />} />
+          <Route path="/leads" element={<Leads user={user} />} />
           <Route path="/contacts" element={<Contacts user={user} />} />
+          <Route path="/pipeline" element={<Pipeline user={user} />} />
+          <Route path="/campaigns" element={<Campaigns user={user} />} />
           <Route path="/deals" element={<Deals user={user} />} />
           <Route path="/activities" element={<Activities user={user} />} />
           <Route path="/tickets" element={<Tickets user={user} />} />

@@ -414,6 +414,21 @@ class LeadAttribution(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class Campaign(Base):
+    __tablename__ = "campaigns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    channel: Mapped[str] = mapped_column(String(40), default="email")
+    status: Mapped[str] = mapped_column(String(30), default="draft")
+    source: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    budget: Mapped[float] = mapped_column(Float, default=0)
+    start_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    end_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class BackupLog(Base):
     __tablename__ = "backup_logs"
 

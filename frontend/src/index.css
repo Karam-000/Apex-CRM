@@ -7,5 +7,16 @@
 }
 
 body {
-  @apply bg-gray-50 text-gray-900;
+  @apply bg-surface text-on-surface;
 }
+
+/* Material Symbols icon helper (used where Material icons are rendered) */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* Cleaner enterprise scrollbars */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background-color: #bec8d2; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background-color: #6e7881; }
