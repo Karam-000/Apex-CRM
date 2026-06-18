@@ -1,12 +1,7 @@
 from app.core.db import Base, SessionLocal, engine
 from app.core.security import hash_password, hash_token
 from app.models.entities import (
-    Account,
     ApiCredential,
-    Contact,
-    ContactConsent,
-    Deal,
-    QuotaTarget,
     Role,
     TicketSLAPolicy,
     User,
@@ -14,6 +9,13 @@ from app.models.entities import (
 
 
 def run_seed(db) -> None:
+    """Provision the minimum a production install needs to operate.
+
+    This creates the role definitions, the default login accounts, their API
+    credentials, and the default SLA policies. It intentionally seeds **no**
+    sample business data (accounts, contacts, deals, etc.) so the system
+    starts empty and ready for real use.
+    """
     def ensure_role(name: str, permissions: dict) -> Role:
         existing = db.query(Role).filter(Role.name == name).first()
         if existing:
@@ -54,52 +56,6 @@ def run_seed(db) -> None:
     ensure_credential(admin.id, "admin", 1, "admin-1-token")
     ensure_credential(supervisor.id, "supervisor", 1, "supervisor-2-token")
     ensure_credential(agent.id, "agent", 1, "agent-3-token")
-    
-    account = db.query(Account).filter(Account.name == "Acme Manufacturing").first()
-    if not account:
-        account = Account(name="Acme Manufacturing", industry="manufacturing", size_band="50-200", owner_user_id=admin.id)
-        db.add(account)
-        db.flush()
-    
-    contact = db.query(Contact).filter(Contact.email == "sara@acme.local").first()
-    if not contact:
-        contact = Contact(
-            account_id=account.id,
-            first_name="Sara",
-            last_name="Nasser",
-            email="sara@acme.local",
-            job_title="Head of Sales",
-            lifecycle_stage="mql",
-            owner_user_id=agent.id,
-        )
-        db.add(contact)
-        db.flush()
-
-    has_consent = (
-        db.query(ContactConsent)
-        .filter(ContactConsent.contact_id == contact.id, ContactConsent.channel == "email", ContactConsent.status == "granted")
-        .first()
-    )
-    if not has_consent:
-        db.add(ContactConsent(contact_id=contact.id, channel="email", status="granted", source="seed"))
-    
-    has_deal = db.query(Deal).filter(Deal.primary_contact_id == contact.id).first()
-    if not has_deal:
-        db.add(
-            Deal(
-                account_id=account.id,
-                primary_contact_id=contact.id,
-                stage_id=2,
-                amount=25000,
-                owner_user_id=agent.id,
-                win_probability=0.35,
-                status="open",
-            )
-        )
-    
-    has_quota = db.query(QuotaTarget).filter(QuotaTarget.user_id == agent.id, QuotaTarget.period_month == "2026-04").first()
-    if not has_quota:
-        db.add(QuotaTarget(user_id=agent.id, period_month="2026-04", quota_amount=100000, set_by_user_id=admin.id))
 
     if db.query(TicketSLAPolicy).filter(TicketSLAPolicy.name == "Default Medium").first() is None:
         db.add(
